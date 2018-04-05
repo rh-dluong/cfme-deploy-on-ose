@@ -1,0 +1,88 @@
+---
+- name: Make install-metrics.sh script
+  template:
+    src: templates/install_metrics.j2
+    force: yes
+    dest: ~/cfme-deploy/install-metrics.sh
+    mode: +x
+  when: hawkular_metrics
+- name: Log into openshift
+  shell: oc login -u system:admin
+- name: Check to see if Hawkular is already deployed
+  shell: oc get pods -n openshift-infra
+  register: hawkular_deploy
+  when: hawkular_metrics
+- name: Deploy hawkular metrics
+  shell: ~/cfme-deploy/install-metrics.j2
+  when: '"hawkular" not in hawkular_deploy.stdout'
+- name: Get token secret
+  shell: oc serviceaccounts -n management-infra get-token management-admin | tr -d "\r\n"
+  register: token_secret
+  when: hawkular_metrics
+- name: Get hawkular route
+  script: get-hawkular-route.sh
+  register: hawkular_route
+  when: hawkular_metrics
+- name: Get cloudforms route
+  script: get-cloudforms-route.sh
+  register: cloudforms_route
+- name: Wait for hawkular status to be ready for all 3 pods
+  script: get-hawkular-status.sh
+  register: hawkular_status
+  retries: 10
+  delay: 60
+  until: '"0" not in hawkular_status.stdout'
+  when: hawkular_metrics
+- name: Add repository
+  yum_repository:
+    name: epel
+    description: EPEL YUM repo
+    baseurl: https://download.fedoraproject.org/pub/epel/7/x86_64/
+    gpgkey: https://download.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-7
+- name: Install pip
+  yum:
+    name: python-pip
+    state: present
+- name: Remove repository (and clean up left-over metadata)
+  yum_repository:
+    name: epel
+    state: absent
+- name: Install manageiq api
+  shell: pip install git+https://github.com/ManageIQ/manageiq-api-client-python.git
+- name: Create a new provider in ManageIQ (no metrics)
+  manageiq_provider:
+    name: 'OSE_37'
+    type: 'Openshift'
+    provider:
+      auth_key: '{{ token_secret.stdout }}'
+      hostname: "{{openshift_console}}"
+      port: 443
+      verify_ssl: False
+    manageiq_connection:
+      url: '{{ cloudforms_route }}'
+      username: 'admin'
+      password: 'smartvm'
+      verify_ssl: False
+  when: not hawkular_metrics
+- name: Create a new provider in ManageIQ ('Hawkular' metrics)
+  manageiq_provider:
+    name: 'OSE_37'
+    type: 'Openshift'
+    provider:
+      auth_key: "{{token_secret.stdout}}"
+      hostname: "{{openshift_console}}"
+      port: 443
+      security_protocol: ssl-without-validation
+    metrics:
+      auth_key: "{{token_secret.stdout}}"
+      role: 'hawkular'
+      hostname: "{{hawkular_route.stdout}}"
+      port: 443
+      security_protocol: ssl-without-validation
+      verify_ssl: false
+    manageiq_connection:
+      url: "https://{{cloudforms_route.stdout}}"
+      username: 'admin'
+      password: 'smartvm'
+      verify_ssl: false
+  when: '"0" not in hawkular_status.stdout'

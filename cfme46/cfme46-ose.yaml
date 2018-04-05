@@ -1,0 +1,27 @@
+---
+- hosts:
+  become: true
+  vars:
+    - hawkular_metrics: true
+    - add_provider: true
+    - project_name: cloudforms46
+    - openshift_console: "openshift.{{ansible_domain}}" 
+#   - cluster_admin: quicklab
+    - login_credentials: system:admin
+#   - login_credentials: username -p password https://openshift.hostname.com
+#   - login_crednetials: username -p password https://openshift.hostname.com --insecure-skip-tls-verify
+  tasks: 
+  - name: login to openshift
+    shell:  "oc login -u {{login_credentials}}"
+  - name: Add cluster-admin to user
+    shell: "oadm policy add-cluster-role-to-user cluster-admin {{cluster_admin}}"
+    when: cluster_admin is defined
+  - name: Check to see if cloudforms already deployed
+    shell: oc projects
+    register: project_status
+  - name: Deploy cloudforms
+    include_tasks: cfme46-ose-first-deploy.yaml
+    when: 'project_name not in project_status.stdout'
+  - name: Redeploying cloudforms
+    include_tasks: cfme46-ose-redo.yaml
+    when: 'project_name in project_status.stdout'

@@ -1,0 +1,65 @@
+---
+- name: Create openshift project cloudforms
+  shell:  oc new-project {{project_name}}
+- name:  Add security contexts
+  shell: |
+    oc adm policy add-scc-to-user anyuid system:serviceaccount:{{project_name}}:cfme-anyuid
+    oc adm policy add-scc-to-user anyuid system:serviceaccount:{{project_name}}:cfme-orchestrator
+    oc adm policy add-scc-to-user privileged system:serviceaccount:{{project_name}}:cfme-privileged
+    oc adm policy add-scc-to-user anyuid system:serviceaccount:{{project_name}}:cfme-httpd
+    oc policy add-role-to-user view system:serviceaccount:{{project_name}}:cfme-orchestrator -n {{project_name}}
+    oc policy add-role-to-user edit system:serviceaccount:{{project_name}}:cfme-orchestrator -n {{project_name}}
+- name: Make dir for templates and scripts
+  file:
+    state: directory
+    path: ~/cfme-deploy
+- name: Make template for cmfe deploy
+  template:
+    src: templates/cfme-template-46.j2
+    force: yes
+    dest: ~/cfme-deploy/cfme-template46.yaml
+- name: Allow more tags for imagestreams
+  blockinfile:
+    path: /etc/origin/master/master-config.yaml
+    insertafter: EOF
+    state: present
+    block: |
+      imagePolicyConfig:
+        maxImagesBulkImportedPerRepository: 100
+  register: imagestreams
+- name: Restart openshift service if imagestreams configured 
+  shell: systemctl restart atomic-openshift-master
+  ignore_errors: yes
+  register: restart_master
+  when: imagestreams.changed
+- name: Restart openshift service for HA
+  service:
+    name: atomic-openshift-master-controllers
+    state: restarted
+  when: 
+    - (imagestreams.changed)
+- name: Restart openshift service for HA
+  service:
+    name: atomic-openshift-master-api
+    state: restarted
+  when: 
+    - (imagestreams.changed)
+- name: Create cfme-template
+  shell: oc create -f ~/cfme-deploy/cfme-template46.yaml
+  register: create_template
+  until: create_template.rc == 0
+  retries: 10
+  delay: 1
+- name: Deploy cloudforms
+  shell: oc new-app --template=cloudforms46
+- name: Wait for cloudforms status to be ready for all 3 pods
+  script: get-cloudforms-status.sh
+  register: cloudforms_status
+  retries: 10
+  delay: 60
+  until: '"0" not in cloudforms_status.stdout' 
+- name: Import playbook
+  include_tasks: add-openshift-provider.yaml
+  when: 
+    - ('"0" not in cloudforms_status.stdout')
+    - (add_provider)

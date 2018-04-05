@@ -1,0 +1,46 @@
+---
+- name: Switch to project
+  shell: oc project {{project_name}}
+- name: delete app
+  shell: oc delete -n {{project_name}} all --all
+- name: Determine if templates already there
+  stat: 
+    path: ~/cfme-deploy
+  register: template_status
+- name: Make cfme-deploy template if not present
+  file:
+    path: ~/cfme-deploy
+    state: directory
+  when: template_status is not defined
+- name: Make template for cmfe deploy
+  template:
+    src: templates/cfme-template-46.j2
+    force: yes
+    dest: ~/cfme-deploy/cfme-template46.yaml
+- name: Delete cfme template
+  shell: oc delete -f ~/cfme-deploy/cfme-template46.yaml
+- name: Create cfme-template
+  shell: oc create -f ~/cfme-deploy/cfme-template46.yaml
+- name: Wait 30 seconds between deleting pv and pvc
+  pause:
+    seconds: 30
+- name: Delete pvcs
+  shell: | 
+    oc delete pvc {{project_name}}-server-{{project_name}}-0
+    oc delete pvc {{project_name}}-postgresql 
+  ignore_errors: yes
+- name: Deploy cloudforms
+  shell: oc new-app --template=cloudforms46
+  ignore_errors: yes
+- name: Wait for cloudforms status to be ready for all 3 pods
+  script: get-cloudforms-status.sh
+  register: cloudforms_status
+  retries: 10
+  delay: 60
+  until: '"0" not in cloudforms_status.stdout'
+- name: Import playbook
+  include_tasks: add-openshift-provider.yaml
+  when: 
+    - ('"0" not in cloudforms_status.stdout')
+    - (add_provider)
+
